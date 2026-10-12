@@ -1,9 +1,10 @@
 import type { Request, Response } from "express";
 import { v4 as uuidv4 } from "uuid";
-import sharp from "sharp";
 import { prisma } from "../lib/prisma.js";
 import { storageService } from "../services/storage.service.js";
 import { validationService } from "../services/validation.service.js";
+import { demoService } from "../services/demo.service.js";
+import { REJECTION_DEFINITIONS } from "../constants/index.js";
 
 export class ImageController {
   public async uploadImages(req: Request, res: Response): Promise<void> {
@@ -68,7 +69,10 @@ export class ImageController {
                 width: outcome.width,
                 height: outcome.height,
                 rejectionReasons: outcome.rejectionReasons,
-                failureDetails: outcome.metrics as any,
+                failureDetails: {
+                  ...outcome.metrics,
+                  rejectionDetails: outcome.rejectionDetails,
+                } as any,
                 perceptualHash: outcome.metrics.perceptualHash,
                 blurScore: outcome.metrics.blurScore,
                 faceCount: outcome.metrics.faceCount,
@@ -77,13 +81,15 @@ export class ImageController {
             });
           } catch (processingErr) {
             console.error("Async image processing failure:", processingErr);
+            const failureDetail = REJECTION_DEFINITIONS.PROCESSING_FAILED();
             await prisma.uploadedImage.update({
               where: { id: item.record.id },
               data: {
                 status: "REJECTED",
-                rejectionReasons: [
-                  "Processing error occurred during validation",
-                ],
+                rejectionReasons: [failureDetail.label],
+                failureDetails: {
+                  rejectionDetails: [failureDetail],
+                } as any,
               },
             });
           }
@@ -201,7 +207,10 @@ export class ImageController {
           width: outcome.width,
           height: outcome.height,
           rejectionReasons: outcome.rejectionReasons,
-          failureDetails: outcome.metrics as any,
+          failureDetails: {
+            ...outcome.metrics,
+            rejectionDetails: outcome.rejectionDetails,
+          } as any,
           perceptualHash: outcome.metrics.perceptualHash,
           blurScore: outcome.metrics.blurScore,
           faceCount: outcome.metrics.faceCount,
@@ -216,122 +225,12 @@ export class ImageController {
     }
   }
 
-  public async seedDemoImages(req: Request, res: Response): Promise<void> {
+  public async seedDemoImages(_req: Request, res: Response): Promise<void> {
     try {
-      const createSyntheticPhoto = async (
-        width: number,
-        height: number,
-        faceRadius: number,
-        faceCenterX: number,
-        faceCenterY: number,
-        blurVal: number,
-        secondFace: boolean = false,
-      ) => {
-        let svg = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <radialGradient id="bg" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stop-color="#475569" />
-              <stop offset="100%" stop-color="#1e293b" />
-            </radialGradient>
-          </defs>
-          <rect width="${width}" height="${height}" fill="url(#bg)" />
-          <circle cx="${faceCenterX}" cy="${faceCenterY}" r="${faceRadius}" fill="#e0a97a" />
-          <ellipse cx="${faceCenterX}" cy="${faceCenterY + faceRadius * 1.5}" rx="${faceRadius * 1.6}" ry="${faceRadius * 1.8}" fill="#0f172a" />
-          <circle cx="${faceCenterX - faceRadius * 0.35}" cy="${faceCenterY - faceRadius * 0.1}" r="${faceRadius * 0.12}" fill="#ffffff" />
-          <circle cx="${faceCenterX + faceRadius * 0.35}" cy="${faceCenterY - faceRadius * 0.1}" r="${faceRadius * 0.12}" fill="#ffffff" />
-          <circle cx="${faceCenterX - faceRadius * 0.35}" cy="${faceCenterY - faceRadius * 0.1}" r="${faceRadius * 0.06}" fill="#000000" />
-          <circle cx="${faceCenterX + faceRadius * 0.35}" cy="${faceCenterY - faceRadius * 0.1}" r="${faceRadius * 0.06}" fill="#000000" />
-          <path d="M ${faceCenterX - faceRadius * 0.3} ${faceCenterY + faceRadius * 0.4} Q ${faceCenterX} ${faceCenterY + faceRadius * 0.65} ${faceCenterX + faceRadius * 0.3} ${faceCenterY + faceRadius * 0.4}" stroke="#7c2d12" stroke-width="${faceRadius * 0.08}" fill="none" stroke-linecap="round" />`;
-
-        if (secondFace) {
-          svg += `<circle cx="${faceCenterX + faceRadius * 1.8}" cy="${faceCenterY}" r="${faceRadius * 0.8}" fill="#d49b6a" />
-            <ellipse cx="${faceCenterX + faceRadius * 1.8}" cy="${faceCenterY + faceRadius * 1.3}" rx="${faceRadius * 1.2}" ry="${faceRadius * 1.5}" fill="#334155" />`;
-        }
-
-        svg += `</svg>`;
-
-        let pipeline = sharp(Buffer.from(svg));
-        if (blurVal > 0) {
-          pipeline = pipeline.blur(blurVal);
-        }
-        return await pipeline.jpeg({ quality: 90 }).toBuffer();
-      };
-
-      const demoSamples = [
-        {
-          name: "valid-headshot-1.jpg",
-          generate: () =>
-            createSyntheticPhoto(600, 600, 160, 300, 260, 0, false),
-        },
-        {
-          name: "valid-headshot-2.jpg",
-          generate: () =>
-            createSyntheticPhoto(640, 640, 170, 320, 270, 0, false),
-        },
-        {
-          name: "blurry-photo.jpg",
-          generate: () =>
-            createSyntheticPhoto(600, 600, 150, 300, 260, 12, false),
-        },
-        {
-          name: "face-too-far.jpg",
-          generate: () =>
-            createSyntheticPhoto(800, 800, 45, 400, 300, 0, false),
-        },
-        {
-          name: "multiple-faces-group.jpg",
-          generate: () =>
-            createSyntheticPhoto(600, 600, 110, 200, 250, 0, true),
-        },
-      ];
-
-      for (const sample of demoSamples) {
-        const buffer = await sample.generate();
-        const fileId = uuidv4();
-        const storageFilename = `${fileId}-${sample.name}`;
-
-        const outcome = await validationService.processAndValidate(
-          buffer,
-          "image/jpeg",
-          sample.name,
-        );
-
-        const { storageUrl } = await storageService.upload(
-          outcome.processedBuffer,
-          storageFilename,
-          outcome.mimeType,
-        );
-
-        const status = outcome.isValid ? "ACCEPTED" : "REJECTED";
-
-        await prisma.uploadedImage.create({
-          data: {
-            id: fileId,
-            originalName: sample.name,
-            fileName: storageFilename,
-            storageUrl,
-            mimeType: outcome.mimeType,
-            fileSizeBytes: buffer.length,
-            width: outcome.width,
-            height: outcome.height,
-            status,
-            rejectionReasons: outcome.rejectionReasons,
-            failureDetails: outcome.metrics as any,
-            perceptualHash: outcome.metrics.perceptualHash,
-            blurScore: outcome.metrics.blurScore,
-            faceCount: outcome.metrics.faceCount,
-            faceAreaRatio: outcome.metrics.faceAreaRatio,
-          },
-        });
-      }
-
-      const allImages = await prisma.uploadedImage.findMany({
-        orderBy: { createdAt: "desc" },
-      });
-
+      const data = await demoService.seedDemoBatch();
       res.json({
         message: "Demo photos seeded successfully",
-        data: allImages,
+        data,
       });
     } catch (err: any) {
       console.error("Seed demo images error:", err);

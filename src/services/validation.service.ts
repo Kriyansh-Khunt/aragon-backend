@@ -1,11 +1,18 @@
 import sharp from "sharp";
 import convert from "heic-convert";
-import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { blurService } from "./blur.service.js";
 import { faceService } from "./face.service.js";
 import { hasherService } from "./hasher.service.js";
-import type { ImageValidationOutcome } from "../types/index.js";
+import {
+  VALIDATION_LIMITS,
+  ALLOWED_MIME_TYPES,
+  REJECTION_DEFINITIONS,
+} from "../constants/index.js";
+import type {
+  ImageValidationOutcome,
+  RejectionDetail,
+} from "../types/index.js";
 
 export class ValidationService {
   public async processAndValidate(
@@ -13,7 +20,7 @@ export class ValidationService {
     originalMime: string,
     originalName: string,
   ): Promise<ImageValidationOutcome> {
-    const rejectionReasons: string[] = [];
+    const rejectionDetails: RejectionDetail[] = [];
     let workingBuffer = fileBuffer;
     let mimeType = originalMime.toLowerCase();
 
@@ -32,16 +39,14 @@ export class ValidationService {
         });
         workingBuffer = Buffer.from(converted);
         mimeType = "image/jpeg";
-      } catch (err) {
-        rejectionReasons.push("Failed to convert HEIC image");
+      } catch {
+        rejectionDetails.push(REJECTION_DEFINITIONS.HEIC_CONVERSION_FAILED());
       }
     }
 
-    const allowedMimes = ["image/jpeg", "image/jpg", "image/png"];
-    if (!allowedMimes.includes(mimeType)) {
-      rejectionReasons.push(
-        "Unsupported file format (only JPG, PNG, HEIC allowed)",
-      );
+    const isAllowedMime = ALLOWED_MIME_TYPES.includes(mimeType as any);
+    if (!isAllowedMime) {
+      rejectionDetails.push(REJECTION_DEFINITIONS.UNSUPPORTED_FORMAT());
     }
 
     let width = 0;
@@ -51,17 +56,20 @@ export class ValidationService {
       width = meta.width || 0;
       height = meta.height || 0;
     } catch {
-      rejectionReasons.push("Corrupted or unreadable image file");
+      rejectionDetails.push(REJECTION_DEFINITIONS.CORRUPTED_FILE());
     }
 
     const fileSizeBytes = workingBuffer.length;
-    if (fileSizeBytes < env.MIN_FILE_SIZE_BYTES) {
-      rejectionReasons.push("File size too small (minimum 30 KB required)");
+    if (fileSizeBytes < VALIDATION_LIMITS.MIN_FILE_SIZE_BYTES) {
+      rejectionDetails.push(REJECTION_DEFINITIONS.FILE_TOO_SMALL());
     }
 
-    if (width < env.MIN_WIDTH || height < env.MIN_HEIGHT) {
-      rejectionReasons.push(
-        `Resolution too low (${width}x${height}, minimum ${env.MIN_WIDTH}x${env.MIN_HEIGHT} required)`,
+    if (
+      width < VALIDATION_LIMITS.MIN_WIDTH ||
+      height < VALIDATION_LIMITS.MIN_HEIGHT
+    ) {
+      rejectionDetails.push(
+        REJECTION_DEFINITIONS.RESOLUTION_TOO_LOW({ width, height }),
       );
     }
 
@@ -88,17 +96,17 @@ export class ValidationService {
       if (duplicateCheck.isDuplicate) {
         isDuplicate = true;
         matchedImageId = duplicateCheck.matchedImageId;
-        rejectionReasons.push("Too similar to another upload");
+        rejectionDetails.push(REJECTION_DEFINITIONS.DUPLICATE_IMAGE());
       }
     } catch (dbError) {
-      console.warn("DB check during similarity skipped:", dbError);
+      console.warn("Database duplicate check skipped:", dbError);
     }
 
     const { variance: blurScore, isBlurry } =
       await blurService.computeLaplacianVariance(workingBuffer);
 
     if (isBlurry) {
-      rejectionReasons.push("Blurry face detected");
+      rejectionDetails.push(REJECTION_DEFINITIONS.BLURRY_IMAGE());
     }
 
     const faceResult = await faceService.analyzeFaces(
@@ -108,19 +116,23 @@ export class ValidationService {
     );
 
     if (faceResult.faceCount === 0) {
-      rejectionReasons.push("No face detected in photo");
+      rejectionDetails.push(REJECTION_DEFINITIONS.NO_FACE_DETECTED());
     } else if (faceResult.faceCount > 1) {
-      rejectionReasons.push(
-        `Multiple faces detected (${faceResult.faceCount} people found)`,
+      rejectionDetails.push(
+        REJECTION_DEFINITIONS.MULTIPLE_FACES({ count: faceResult.faceCount }),
       );
-    } else if (faceResult.faceAreaRatio < env.MIN_FACE_AREA_RATIO) {
-      rejectionReasons.push("Face is too far away");
+    } else if (
+      faceResult.faceAreaRatio < VALIDATION_LIMITS.MIN_FACE_AREA_RATIO
+    ) {
+      rejectionDetails.push(REJECTION_DEFINITIONS.FACE_TOO_FAR());
     }
 
-    const isValid = rejectionReasons.length === 0;
+    const isValid = rejectionDetails.length === 0;
+    const rejectionReasons = rejectionDetails.map((item) => item.label);
 
     return {
       isValid,
+      rejectionDetails,
       rejectionReasons,
       processedBuffer: workingBuffer,
       mimeType,

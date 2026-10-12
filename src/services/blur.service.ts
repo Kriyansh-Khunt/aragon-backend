@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import { env } from "../config/env.js";
+import { VALIDATION_LIMITS } from "../constants/index.js";
 
 export class BlurService {
   private readonly laplacianKernel = {
@@ -37,7 +37,7 @@ export class BlurService {
     }
 
     const variance = Number((squaredDiffSum / totalPixels).toFixed(2));
-    const isBlurry = variance < env.BLUR_THRESHOLD;
+    const isBlurry = variance < VALIDATION_LIMITS.BLUR_THRESHOLD;
 
     return { variance, isBlurry };
   }
