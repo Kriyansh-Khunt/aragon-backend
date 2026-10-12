@@ -43,13 +43,16 @@ export class ImageController {
         data: initialRecords.map((item) => item.record),
       });
 
-      for (const item of initialRecords) {
-        (async () => {
+      (async () => {
+        const batchAcceptedHashes: Array<{ id: string; hash: string }> = [];
+
+        for (const item of initialRecords) {
           try {
             const outcome = await validationService.processAndValidate(
               item.file.buffer,
               item.file.mimetype,
               item.file.originalname,
+              batchAcceptedHashes,
             );
 
             const { storageUrl } = await storageService.upload(
@@ -59,6 +62,13 @@ export class ImageController {
             );
 
             const status = outcome.isValid ? "ACCEPTED" : "REJECTED";
+
+            if (outcome.isValid && outcome.metrics.perceptualHash) {
+              batchAcceptedHashes.push({
+                id: item.record.id,
+                hash: outcome.metrics.perceptualHash,
+              });
+            }
 
             await prisma.uploadedImage.update({
               where: { id: item.record.id },
@@ -93,8 +103,8 @@ export class ImageController {
               },
             });
           }
-        })();
-      }
+        }
+      })();
     } catch (err: any) {
       console.error("Upload controller error:", err);
       res.status(500).json({ error: err.message || "Failed to upload images" });

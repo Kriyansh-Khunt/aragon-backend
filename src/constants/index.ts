@@ -30,7 +30,7 @@ export const REJECTION_DEFINITIONS: Record<
   UNSUPPORTED_FORMAT: () => ({
     code: "UNSUPPORTED_FORMAT",
     label: "Unsupported format",
-    description: "Invalid file format. Please upload JPG, PNG, or HEIC photos.",
+    description: "Invalid file format. Please upload JPG, PNG or HEIC photos.",
   }),
   CORRUPTED_FILE: () => ({
     code: "CORRUPTED_FILE",
@@ -54,7 +54,7 @@ export const REJECTION_DEFINITIONS: Record<
     code: "DUPLICATE_IMAGE",
     label: "Too similar to another upload",
     description:
-      "You've already uploaded images similar to this photo. Our AI suggests uploading a diversity of photos with different backgrounds, lighting, and clothing.",
+      "You've already uploaded images similar to this photo. Our AI suggests uploading a diversity of photos with different backgrounds, lighting and clothing.",
   }),
   BLURRY_IMAGE: () => ({
     code: "BLURRY_IMAGE",

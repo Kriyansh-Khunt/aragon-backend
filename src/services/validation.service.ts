@@ -19,6 +19,7 @@ export class ValidationService {
     fileBuffer: Buffer,
     originalMime: string,
     originalName: string,
+    inFlightCandidates: Array<{ id: string; hash: string }> = [],
   ): Promise<ImageValidationOutcome> {
     const rejectionDetails: RejectionDetail[] = [];
     let workingBuffer = fileBuffer;
@@ -84,13 +85,15 @@ export class ValidationService {
         select: { id: true, perceptualHash: true },
       });
 
-      const hashCandidates = existingImages
+      const dbCandidates = existingImages
         .filter((item) => item.perceptualHash !== null)
         .map((item) => ({ id: item.id, hash: item.perceptualHash as string }));
 
+      const allCandidates = [...dbCandidates, ...inFlightCandidates];
+
       const duplicateCheck = hasherService.findDuplicate(
         perceptualHash,
-        hashCandidates,
+        allCandidates,
       );
 
       if (duplicateCheck.isDuplicate) {
